@@ -21,6 +21,7 @@ import com.netflix.conductor.client.worker.PropertyFactory;
 import com.netflix.conductor.client.worker.Worker;
 import com.netflix.conductor.common.metadata.tasks.Task;
 import com.netflix.conductor.common.metadata.tasks.TaskResult;
+import com.netflix.conductor.common.utils.RetryUtil;
 import com.netflix.discovery.EurekaClient;
 import com.netflix.servo.monitor.Stopwatch;
 import org.slf4j.Logger;
@@ -410,25 +411,18 @@ public class WorkflowTaskCoordinator {
 	}
 
 	private void updateWithRetry(int count, Task task, TaskResult result, Worker worker) {
-
-		if(count < 0) {
+		try {
+			String description = String.format("Retry updating task result: %s for task: %s in worker: %s", result.toString(), task.getTaskDefName(), worker.getIdentity());
+			String methodName = "updateWithRetry";
+            new RetryUtil<>().retryOnException(() ->
+            {
+                client.updateTask(result);
+                return null;
+            }, null, null, count, description, methodName);
+		} catch (Exception e) {
 			worker.onErrorUpdate(task);
-			return;
-		}
-
-		try{
-			client.updateTask(result);
-		}catch(Exception e) {
 			WorkflowTaskMetrics.taskUpdateErrorCounter(worker.getTaskDefName(), e);
-			logger.error(String.format("Unable to update %s, count = %d", result.toString(), count), e);
-			try {
-				Thread.sleep(sleepWhenRetry);
-				updateWithRetry(--count, task, result, worker);
-			} catch (InterruptedException ie) {
-				// exit retry loop and propagate
-				logger.debug("Update interrupted", ie);
-				Thread.currentThread().interrupt();
-			}
+			logger.error(String.format("Failed to update result: %s for task: %s in worker: %s", result.toString(), task.getTaskDefName(), worker.getIdentity()), e);
 		}
 	}
 
